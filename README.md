@@ -36,7 +36,7 @@ WebRTC两端可能位于同一局域网内，也有可能分别位于自己的�
 
    在检查连接或协商会话之前，必须知道能否将信息发送到另一端，以及另一端是否愿意建立连接。对此，需要一个**共享的发信通道**。
 
-   WebRTC并没有把发送信号和协议的选择交给应用，可以让现有通信设施中的其他发信协议操作实现。
+   WebRTC把发送信号和协议的选择交给应用，可以让现有通信设施中的其他发信协议操作实现。
 
    如：
 
@@ -215,6 +215,8 @@ ICE框架中存在两种连接状态，分别为`iceGatheringState`和`iceConnec
 - disconnected: 一或多个组件的活动检查失败，相对failed更严重
 - closed: ICE代理关闭，不再响应STUN请求
 
+![iceconnectionstate](http://www.reyshieh.com/assets/iceConnectionState.png)
+
 ## JavaScript API
 
 ### getUserMedia()
@@ -283,7 +285,7 @@ RTCPeerConnection接口负责维护每一个端到端连接的完整生命周期
 
 RTCPeerConnection把所有连接设置、管理和状态都封装在了一个接口中。
 
-###RTCDataChannel
+### RTCDataChannel
 
 RTCDataChannel支持端到端的任意应用数据交换。建立RTCPeerConnection连接之后，**两端可以打开一或多个信道交换文本或二进制数据**：
 
