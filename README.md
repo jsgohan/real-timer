@@ -392,7 +392,7 @@ function handleLocalMediaStreamError(error) {
 
 ### 用例2：本地端到端建立连接(不使用STUN、TURN)
 
-WebRTC客户端之间创建视频通话，首先每个客户端要创建一个RTCPeerConnection实例，通过getUserMedia()获取本地媒体流；其次ICE执行路由和检查连接，将所有可能的连接点都当做ICE候选并发送给对方，获取本地及远程的描述信息(SDP)，相互确认连接建立完成；顺利开始传输流。期间可能会遇到连接断开、找到更优的路径等，都是由内置ICE实现切换和重连。
+WebRTC客户端之间创建视频通话，首先每个客户端要创建一个`RTCPeerConnection`实例，通过`getUserMedia()`获取本地媒体流；其次ICE执行路由和检查连接，将所有可能的连接点都当做ICE候选并发送给对方，获取本地及远程的描述信息(SDP)，相互确认连接建立完成；顺利开始传输流。期间可能会遇到连接断开、找到更优的路径等，都是由内置ICE实现切换和重连。
 
 1. 调用getUserMedia()，获取到本地stream传给localVideo
 
@@ -419,7 +419,7 @@ WebRTC客户端之间创建视频通话，首先每个客户端要创建一个RT
 
    servers参数为null，可以指定STUN和TURN服务器相关的信息。
 
-3. 设置onicecandidate回调，本地ICE代理在发现一个ICE候选项后就立即发送(**此处采用的是增量提供的方式，先用createOffer/createAnswer建立端到端连接的SDP(提议)描述，再等候选描述就绪，立即执行ICE连接检查**)。因为只有本地直接通信，不再需要外部消息服务，调用addIceCandidate()方法，将候选信息传给remote peer描述对象。
+3. 设置onicecandidate回调，本地ICE代理在发现一个ICE候选项后就立即发送(**此处采用的是增量提供的方式，先用createOffer/createAnswer建立端到端连接的SDP(提议)描述，再等候选描述就绪，立即执行ICE连接检查**)。因为只有本地直接通信，不再需要外部消息服务，无论是local peer还是remote peer，都只要调用`addIceCandidate()`方法，将候选信息传给对方。
 
    ```js
    localPeerConnection.addEventListener('icecandidate', handleConnection);
@@ -443,15 +443,22 @@ WebRTC客户端之间创建视频通话，首先每个客户端要创建一个RT
    }
    ```
 
-4. 将1中的本地流添加到本地peer
+4. 通过RTCPeerConnection注册本地流，remote peer通过监听`onaddstream`获取到远程过来的流，并进行下一步操作，无论是输出到对应的`audio/video`，还是`canvas API`对帧处理，又或者是`WebGL`处理
 
    ```js
    localPeerConnection.addStream(localStream);
+   remotePeerConnection.addEventListener('addstream', gotRemoteMediaStream);
+   
+   function gotRemoteMediaStream(event) {
+       const mediaStream = event.stream;
+       remoteVideo.srcObject = mediaStream;
+       remoteStream = mediaStream;
+   }
    ```
 
-5. webRTC客户端通过createOffer和createAnswer交换SDP提议，其中SDP包括本地和远程音频/视频媒体信息，如要交换的媒体类型（音频、视频及应用数据）、网络传输协议、使用的编解码其及其设置、带宽及其他元数据，(以下流程中local peer用A表示，remote peer用B表示)
+5. webRTC客户端通过`createOffer`和`createAnswer`交换SDP提议，其中SDP包括本地和远程音频/视频媒体信息，如要交换的媒体类型（音频、视频及应用数据）、网络传输协议、使用的编解码其及其设置、带宽及其他元数据，(以下流程中local peer用A表示，remote peer用B表示)
 
-   首先，A先用setLocalDescription()方法将本地会话信息保存，接着通过信令通道，将这些信息发送给B；其次，B使用setRemoteDescription()方法将A传过来的远端会话信息填进去；然后B执行createAnswer()方法，传入获取到的远端会话信息，生成一个与A适配的本地会话，用setLocalDescription()方法保存，也发送给A；最后，A获取到B的会话描述信息之后，使用setRemoteDescription()方法将远端会话信息设置进去。
+   首先，A先用`setLocalDescription()`方法将本地会话信息保存，接着通过信令通道，将这些信息发送给B；其次，B使用`setRemoteDescription()`方法将A传过来的远端会话信息填进去；然后B执行`createAnswer()`方法，传入获取到的远端会话信息，生成一个与A适配的本地会话，用`setLocalDescription()`方法保存，也发送给A；最后，A获取到B的会话描述信息之后，使用`setRemoteDescription()`方法将远端会话信息设置进去。
 
    ```js
    // Logs offer creation and sets peer connection session descriptions.
@@ -494,6 +501,7 @@ WebRTC客户端之间创建视频通话，首先每个客户端要创建一个RT
    }
    ```
 
+### 用例3: RTCDataChannel传输数据
 
 
 
