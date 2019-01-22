@@ -154,7 +154,7 @@ ICE收集过程是自动触发的，STUN查找是在后台执行的，而发现�
 
 ICE代理发送消息(STUN绑定请求)，另一端接收之后必须以一个成功的STUN响应确认。如果这个过程完成，那么就代表着有了一条端到端连接的路由线路；相反，如果所有候选项都绑定失败，要么将RTCPeerConnection标记为失败，要么回退到靠TURN转发服务器建立连接。
 
-上面提到的ICE确认方式其实是很耗时的，为了减少初始化端到端连接的时间，可以通过**端到端之间的增量收集和连接检查方式**来处理。原理如下：
+上面提到的ICE确认方式其实是很耗时的，为了减少初始化端到端连接的时间，可以通过**端到端之间的增量收集和连接检查方式**(增量提供，Trickle ICE)来处理。原理如下：
 
 - 两端交换没有ICE候选项的SDP提议
 - 发现ICE候选项之后，通过发信通道发送到另一端
@@ -260,6 +260,35 @@ ICE框架中存在两种连接状态，分别为`iceGatheringState`和`iceConnec
 - 通过Canvas API采集个别视频帧并加以处理
 - 通过CSS3和WebGL API为输出的流应用各种2D/3D特效
 
+> 注：新版使用Navigator.mediaDevices.getUserMedia()取代navigator.getUserMedia()
+
+constraints配置可以参考[MediaTrackConstraints 规范文档](https://w3c.github.io/mediacapture-main/getusermedia.html#media-track-constraints)
+
+新版e.g.
+
+```js
+const mediaStreamContraints = {
+    video: true
+};
+
+const localVideo = document.querySelector('video');
+
+let localStream;
+
+function gotLocalMediaStream(mediaStream) {
+    localStream = mediaStream;
+    localVideo.srcObject = mediaStream;
+}
+
+function handleLocalMediaStreamError(error) {
+    console.log('navigator.getUserMedia error: ', error);
+}
+
+navigator.mediaDevices.getUserMedia(mediaStreamConstranits)
+	.then(gotLocalMediaStream)
+	.catch(handleLocalMediaStreamError);
+```
+
 ### MediaStream
 
 MediaStream接口是一个实时媒体内容的流，以便应用代码从中取得数据，操作个别的轨道和控制输出。所有的音频和视频处理，比如降噪、均衡、影像增强等都由音频和视频引擎自动完成。
@@ -328,4 +357,143 @@ a=fmtp:5000 protocol=webrtc-datachannel; streams=10 // SCTP之上的RTCDataChann
 ```
 
 沟通完信道参数，两端就可以交换应用数据了。本质上，每个信道都还是作为一个独立的SCTP流发送数据，即所有信道都是在同一个SCTP关联之上多路复用出来的。**这样可以避免不同流之间的队首阻塞，在同一个SCTP关联上同时打开多个信道。**
+
+## 实例
+
+实例伪代码提取自[webrtc-web](https://github.com/googlecodelabs/webrtc-web)，需要完整代码，可以自行点击进入阅读。
+
+如果需要对低版本浏览器做兼容，强烈建议使用[webrtc-adapter](https://github.com/webrtc/adapter)，shim将应用程序与规范更改和前缀差异隔离开来。
+
+### 用例1：本地读取视频流(MediaStream)
+
+```js
+let localStream;
+
+// 获取媒体流传入参数，只获取video
+const mediaStreamContraints = {
+    video: true
+};
+
+// 初始化媒体流
+navigator.mediaDevices.getUserMedia(mediaStreamContraints)
+	.then(getLocalMediaStream).catch(handleLocalMediaStreamError);
+
+// 成功回调，添加媒体流到video标签
+function getLocalMediaStream(mediaStream) {
+    localStream = mediaStream;
+    localStream.srcObject = mediaStream;
+}
+
+// 错误回调，记录错误日志
+function handleLocalMediaStreamError(error) {
+    console.log('navigator.getUserMedia error:', error);
+}
+```
+
+### 用例2：本地端到端建立连接(不使用STUN、TURN)
+
+WebRTC客户端之间创建视频通话，首先每个客户端要创建一个RTCPeerConnection实例，通过getUserMedia()获取本地媒体流；其次ICE执行路由和检查连接，将所有可能的连接点都当做ICE候选并发送给对方，获取本地及远程的描述信息(SDP)，相互确认连接建立完成；顺利开始传输流。期间可能会遇到连接断开、找到更优的路径等，都是由内置ICE实现切换和重连。
+
+1. 调用getUserMedia()，获取到本地stream传给localVideo
+
+   ```js
+   navigator.mediaDevices.getUserMedia(mediaStreamConstraints).
+     then(gotLocalMediaStream).
+     catch(handleLocalMediaStreamError);
+   
+   function gotLocalMediaStream(mediaStream) {
+     localVideo.srcObject = mediaStream;
+     localStream = mediaStream;
+     trace('Received local stream.');
+     callButton.disabled = false;  // Enable call button.
+   }
+   ```
+
+2. 首先创建RTCPeerConnection对象
+
+   ```js
+   let localPeerConnection;
+   let servers = null;
+   localPeerConnection = new RTCPeerConnection(servers);
+   ```
+
+   servers参数为null，可以指定STUN和TURN服务器相关的信息。
+
+3. 设置onicecandidate回调，本地ICE代理在发现一个ICE候选项后就立即发送(**此处采用的是增量提供的方式，先用createOffer/createAnswer建立端到端连接的SDP(提议)描述，再等候选描述就绪，立即执行ICE连接检查**)。因为只有本地直接通信，不再需要外部消息服务，调用addIceCandidate()方法，将候选信息传给remote peer描述对象。
+
+   ```js
+   localPeerConnection.addEventListener('icecandidate', handleConnection);
+   localPeerConnection.addEventListener('iceconnectionstatechange', handleConnectionChange);
+   
+   function handleConnection(event) {
+       const peerConnection = event.target;
+       const iceCandidate = event.candidate;
+       
+       if(iceCandidate) {
+           const newIceCandidate = new RTCIceCandidate(iceCandidate);
+           const otherPeer = getOtherPeer(peerConnection);
+           
+           otherPeer.addIceCandidate(newIceCandidate)
+               .then(() => {
+               // successcallback
+           }).catch((error) => {
+               // failcallback
+           });
+       }
+   }
+   ```
+
+4. 将1中的本地流添加到本地peer
+
+   ```js
+   localPeerConnection.addStream(localStream);
+   ```
+
+5. webRTC客户端通过createOffer和createAnswer交换SDP提议，其中SDP包括本地和远程音频/视频媒体信息，如要交换的媒体类型（音频、视频及应用数据）、网络传输协议、使用的编解码其及其设置、带宽及其他元数据，(以下流程中local peer用A表示，remote peer用B表示)
+
+   首先，A先用setLocalDescription()方法将本地会话信息保存，接着通过信令通道，将这些信息发送给B；其次，B使用setRemoteDescription()方法将A传过来的远端会话信息填进去；然后B执行createAnswer()方法，传入获取到的远端会话信息，生成一个与A适配的本地会话，用setLocalDescription()方法保存，也发送给A；最后，A获取到B的会话描述信息之后，使用setRemoteDescription()方法将远端会话信息设置进去。
+
+   ```js
+   // Logs offer creation and sets peer connection session descriptions.
+   function createdOffer(description) {
+     trace(`Offer from localPeerConnection:\n${description.sdp}`);
+   
+     trace('localPeerConnection setLocalDescription start.');
+     localPeerConnection.setLocalDescription(description)
+       .then(() => {
+         setLocalDescriptionSuccess(localPeerConnection);
+       }).catch(setSessionDescriptionError);
+   
+     trace('remotePeerConnection setRemoteDescription start.');
+     remotePeerConnection.setRemoteDescription(description)
+       .then(() => {
+         setRemoteDescriptionSuccess(remotePeerConnection);
+       }).catch(setSessionDescriptionError);
+   
+     trace('remotePeerConnection createAnswer start.');
+     remotePeerConnection.createAnswer()
+       .then(createdAnswer)
+       .catch(setSessionDescriptionError);
+   }
+   
+   // Logs answer to offer creation and sets peer connection session descriptions.
+   function createdAnswer(description) {
+     trace(`Answer from remotePeerConnection:\n${description.sdp}.`);
+   
+     trace('remotePeerConnection setLocalDescription start.');
+     remotePeerConnection.setLocalDescription(description)
+       .then(() => {
+         setLocalDescriptionSuccess(remotePeerConnection);
+       }).catch(setSessionDescriptionError);
+   
+     trace('localPeerConnection setRemoteDescription start.');
+     localPeerConnection.setRemoteDescription(description)
+       .then(() => {
+         setRemoteDescriptionSuccess(localPeerConnection);
+       }).catch(setSessionDescriptionError);
+   }
+   ```
+
+
+
 
