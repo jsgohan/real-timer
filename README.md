@@ -26,7 +26,7 @@ WebRTC让浏览器具备了完整功能的音频和视频引擎，帮助我们�
 
 - SRTP负责把**数字化的音频采样和视频帧用一些元数据封装起来，以辅助接收方处理这些流**。每个SRTP分组都包含一个自动递增的序号，以便接收端检测和发现媒体数据是否乱序；每个SRTP分组都包含一个时间戳，表示媒体第一字节的采样时间，用于媒体流的同步；都包含加密的媒体净荷，以及可选的认证标签，用于验证分组的完整性
 
-- SCTP专门是为传输任意应用数据的DataChannel API而设计的，SCTP在两端之间建立的DTLS信道之上运行。SCTP是传输层协议，直接在IP协议之上运行。特点是结合了UDP和TCP的优点，**面向消息的API、支持多路复用、可配置的可靠性及交付语义，内置流量和拥塞控制机制**。实际和HTTP2.0的二进制分帧层很类似，首部包含12位公共首部和16位的一或多个控制字段或数据块组成
+- SCTP专门是为传输任意应用数据的DataChannel API而设计的，SCTP在两端之间建立的DTLS信道之上运行。**SCTP是传输层协议**，直接在IP协议之上运行。特点是结合了UDP和TCP的优点，**面向消息的API、支持多路复用、可配置的可靠性及交付语义，内置流量和拥塞控制机制**。实际和HTTP2.0的二进制分帧层很类似，首部包含12位公共首部和16位的一或多个控制字段或数据块组成
 
 接下来，介绍建立端到端连接的过程。
 
@@ -314,6 +314,8 @@ RTCPeerConnection接口负责维护每一个端到端连接的完整生命周期
 
 RTCPeerConnection把所有连接设置、管理和状态都封装在了一个接口中。
 
+RTCPeerConnection构造函数可以传入配置参数来配置新的连接，具体配置可以参考[MDN RTCPeerConnection](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/RTCPeerConnection)中的RTCConfiguration dictionary
+
 ### RTCDataChannel
 
 RTCDataChannel支持端到端的任意应用数据交换。建立RTCPeerConnection连接之后，**两端可以打开一或多个信道交换文本或二进制数据**：
@@ -503,5 +505,64 @@ WebRTC客户端之间创建视频通话，首先每个客户端要创建一个`R
 
 ### 用例3: RTCDataChannel传输数据
 
+WebRTC可以通过数据通道(data channel)，实现端到端的数据传输。
 
+RTCDataChannel采用的是SCTP应用层协议，该协议类似于HTTP2.0方式，使用二进制流，多路复用传输。但是它不能作为TCP或UDP的替代品，只用于WebRTC中。
+
+使用的方式和音视频的传输类似。区别为：
+
+- 音视频local peer通过RTCPeerConnection的`addStream`注册本地流，remote peer通过RTCPeerConnection的`onaddstream`事件监听获取流
+- 数据local peer通过RTCPeerConnection的`createDataChannel`初始化DataChannel，并在初始化完成的channel上注册事件，如`onopen`、`onclose`，注册的事件的api和websocket一致，要往remote peer传输数据时，调用DataChannel的`send()`传输数据，remote peer通过RTCPeerConnection的`ondatachannel`事件监听数据以及注册事件，如`onmessage`、`onopen`、`onclose`
+
+该例中的前面几步流程与例2中的1.2.3.5一致，创建RTCPeerConnection对象，交换SDP提议，获取ICE候选项，基础设施搭建好后才开始正式的传输流程，下面只对传输流程描述，从第5开始。
+
+1-4. 与例2中的相似
+
+5. local peer创建`DataChannel`并注册事件，remote peer监听`ondatachannel`，注册事件等待对端的数据传输过来
+
+   ```js
+   var sendChannel;
+   sendChannel = localConnection.createDataChannel('sendDataChannel', dataConstraint);
+   sendChannel.onopen = onSendChannelStateChange;
+   sendChannel.onclose = onSendChannelStateChange;
+   
+   function onSendChannelStateChange() {
+       var readyState = sendChannel.readyState;
+       if (readyState === 'open') {
+           // 传输数据前要做的操作
+       } else {
+           // 传输数据结束后要做的操作
+       }
+   }
+   
+   remoteConnection.ondatachannel = receiveChannelCallback;
+   function receiveChannelCallback(event) {
+       receiveChannel = event.channel;
+       receiveChannel.onmessage = onReceiveMessageCallback;
+       receiveChannel.onopen = onReceiveChannelStateChange;
+       receiveChannel.onclose = onReceiveChannelStateChange;
+   }
+   function onReceiveMessageCallback(event) {
+       // 接收到远端数据后做的操作
+   }
+   function onReceiveChannelStateChange() {
+   }
+   ```
+
+6. local peer通过RTCDataChannel的send()方法与发送数据
+
+   ```js
+   function sendData(data) {
+       sendChannel.send(data);
+   }
+   ```
+
+需要注意的是，createDataChannel带有第二个参数`dataConstraint`，可以通过配置该参数，来传递各种类型特征的数据，如，可靠性优先还是效率优先，可以参考[MDN createDataChannel](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createDataChannel)中的RTCDataChannelInit dictionary部分。
+
+- ordered - 是否需要按照顺序到达目的端，true为按照顺序，false可以无序，默认为`true`
+- maxPacketLifeTime - 尝试在不可靠模式下传输消息的最大毫秒数，默认为`null`
+- maxRetransmits - 在不可靠模式下，用户代理在首次接收失败后重传数据的最大次数，默认为`null`
+- protocol - RTCDataChannel下使用的子协议名称 默认为空字符串，最大长度不能尝过65535
+- negotiated - 默认`false`，数据通道在带内协商，一端调用createDataChannel，另一端用ondatachannel事件监听；若为true，在带外协商，在这种情况下，双方使用一致同意的id调用createDataChannel
+- Id - 通道的id标识，若不填，用户代理会选择一个id填入
 
