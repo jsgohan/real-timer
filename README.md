@@ -2,6 +2,14 @@
 
 > 该仓库用来记录学习webrtc的心路历程
 
+[WebRTC相关资料和教程](https://webrtc.org/)
+
+[官方示例程序AppRTC](https://github.com/webrtc/apprtc)
+
+[在线demo](https://github.com/webrtc/samples)
+
+[WebRTC-Experiment](https://github.com/muaz-khan/WebRTC-Experiment)
+
 WebRTC，全称为Web Real-Time Communication(Web实时通信)。它是基于UDP传输的，用来实现浏览器之间端到端的音频、视频及数据共享。WebRTC让实时通信更加简单，不需要借助第三方插件和软件。
 
 WebRTC让浏览器具备了完整功能的音频和视频引擎，帮助我们解决了实时解码音频和视频流的困难性，并适应网络抖动和时延。具体引擎实现的功能如下：
@@ -681,4 +689,88 @@ RTCDataChannel采用的是SCTP应用层协议，该协议类似于HTTP2.0方式�
    ```
 
 ### 用例6: 拍照并传给对方
+
+该用例是用例3的扩展，实现实时捕捉最新视频最新帧，传送给远端。
+
+1. 在点击Snap按钮，会从video流中把最新帧捕获下来，并通过canvas元素展示
+
+   ```js
+   function snapPhoto() {
+     photoContext.drawImage(video, 0, 0, photo.width, photo.height);
+     show(photo, sendBtn);
+   }
+   ```
+
+2. 点击Send按钮，会将图像转换成字节数组(bytes)，分块(chunk)的方式发送到对端
+
+   ```js
+   function sendPhoto() {
+     // 将数据分块的字节数长度;
+     var CHUNK_LEN = 64000;
+     var img = photoContext.getImageData(0, 0, photoContextW, photoContextH),
+       len = img.data.byteLength,
+       n = len / CHUNK_LEN | 0;
+   
+     console.log('Sending a total of ' + len + ' byte(s)');
+     dataChannel.send(len);
+   
+     // split the photo and send in chunks of about 64KB
+     for (var i = 0; i < n; i++) {
+       var start = i * CHUNK_LEN,
+         end = (i + 1) * CHUNK_LEN;
+       console.log(start + ' - ' + (end - 1));
+       dataChannel.send(img.data.subarray(start, end));
+     }
+   
+     // send the reminder, if any
+     if (len % CHUNK_LEN) {
+       console.log('last ' + len % CHUNK_LEN + ' byte(s)');
+       dataChannel.send(img.data.subarray(n * CHUNK_LEN));
+     }
+   }
+   ```
+
+3. 对端接收到字节，拼接字节，转为图像存入canvas中
+
+   ```js
+   function receiveDataChromeFactory() {
+     var buf, count;
+   
+     return function onmessage(event) {
+       if (typeof event.data === 'string') {
+         buf = window.buf = new Uint8ClampedArray(parseInt(event.data));
+         count = 0;
+         console.log('Expecting a total of ' + buf.byteLength + ' bytes');
+         return;
+       }
+   
+       var data = new Uint8ClampedArray(event.data);
+       buf.set(data, count);
+   
+       count += data.byteLength;
+       console.log('count: ' + count);
+   
+       if (count === buf.byteLength) {
+         // we're done: all data chunks have been received
+         console.log('Done. Rendering photo.');
+         renderPhoto(buf);
+       }
+     };
+   }
+   
+   function renderPhoto(data) {
+     var canvas = document.createElement('canvas');
+     canvas.width = photoContextW;
+     canvas.height = photoContextH;
+     canvas.classList.add('incomingPhoto');
+     // trail is the element holding the incoming images
+     trail.insertBefore(canvas, trail.firstChild);
+   
+     var context = canvas.getContext('2d');
+     var img = context.createImageData(photoContextW, photoContextH);
+     img.data.set(data);
+     context.putImageData(img, 0, 0);
+   }
+   ```
+
 
