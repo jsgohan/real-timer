@@ -566,3 +566,52 @@ RTCDataChannel采用的是SCTP应用层协议，该协议类似于HTTP2.0方式�
 - negotiated - 默认`false`，数据通道在带内协商，一端调用createDataChannel，另一端用ondatachannel事件监听；若为true，在带外协商，在这种情况下，双方使用一致同意的id调用createDataChannel
 - Id - 通道的id标识，若不填，用户代理会选择一个id填入
 
+### 用例4: 配置信令服务
+
+信令传输(signaling)：传输流媒体音视频/数据，必须先相互交换元数据信息，包括
+
+- 候选网络信息(candidate)
+- 媒介相关的邀请信息(offer)和响应信息(answer)，比如分辨率、编解码器等
+
+搭建信令服务器(signaling server)，为WebRTC客户端(peers)之间传递消息，实际上这些信令都是纯文本格式的，也就是将JavaScript对象序列化为字符串的形式(stringified)。
+
+在实际应用中，还是需要使用STUN和TURN服务器支持的。点击[参考链接](<https://www.html5rocks.com/en/tutorials/webrtc/infrastructure/>)
+
+> 该例用Node.js搭建信令服务器，用Socket.IO模块和JavaScript库来传递消息。
+>
+> Socket.IO非常适合用于学习WebRTC信令，内置了rooms概念。
+
+对于商业级产品来说，可以有更多更好的选择，点击[参考链接 How to Select a Signaling Protocol for Your Next WebRTC Project](https://bloggeek.me/siganling-protocol-webrtc/)
+
+用例中关键步骤有
+
+1. 客户端先发起`create or join`事件，由服务端来判断在客户端发起之前是否已经有别的客户端发起等待别的加入
+
+   ```js
+   var socket = io.connect();
+   
+   sokect.emit('create or join', room); // 向服务端提交请求
+   ```
+
+2. 服务端接收到请求，例子只是两人之间的通信，因此可以使用socket.rooms API判断是否已经满足要求，并向服务端发送响应
+
+   ```js
+   socket.on('create or join', function(room) {
+       var clientsInRoom = io.sockets.adapter.rooms[room];
+       var numClients = clientsInRoom ? Object.keys(clientsInRoom.sockets).length : 0;
+       if (numClients === 0) {
+           socket.join(room);
+           socket.emit('created', room, socket.id);
+       } else if (numClients === 1) {
+           io.sockets.in(room).emit('join', room);
+           socket.join(room);
+           socket.emit('joined', room, socket.id);
+           io.sockets.in(room).emit('ready');
+       } else {
+           socket.emit('full', room);
+       }
+   });
+   ```
+
+### 用例5: 集成对等通信和信令服务
+
