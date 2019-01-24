@@ -421,7 +421,7 @@ WebRTC客户端之间创建视频通话，首先每个客户端要创建一个`R
 
    servers参数为null，可以指定STUN和TURN服务器相关的信息。
 
-3. 设置onicecandidate回调，本地ICE代理在发现一个ICE候选项后就立即发送(**此处采用的是增量提供的方式，先用createOffer/createAnswer建立端到端连接的SDP(提议)描述，再等候选描述就绪，立即执行ICE连接检查**)。因为只有本地直接通信，不再需要外部消息服务，无论是local peer还是remote peer，都只要调用`addIceCandidate()`方法，将候选信息传给对方。
+3. 设置onicecandidate回调，本地ICE代理在发现一个ICE候选项后就立即发送(**此处采用的是增量提供的方式，先用createOffer/createAnswer建立端到端连接的SDP(提议)描述，再等候选描述就绪，立即执行ICE连接检查**)。因为只有本地直接通信，不再需要外部消息服务，无论是local peer还是remote peer，都只要调用`addIceCandidate()`方法，建立远程ICE候选项并开始连接检查。
 
    ```js
    localPeerConnection.addEventListener('icecandidate', handleConnection);
@@ -614,4 +614,71 @@ RTCDataChannel采用的是SCTP应用层协议，该协议类似于HTTP2.0方式�
    ```
 
 ### 用例5: 集成对等通信和信令服务
+
+在用例4的基础上，先搭建信令服务，打开的客户端都会先调用`getUserMedia()`获取本地流，并放入本地video中。结合用例2分析：
+
+1. 客户端(A)打开页面，向信令服务发送`got user media`消息，此时因为只有一个客户端打开，没有远端通信，因此只能看见本地流视频
+
+   ```js
+   navigator.mediaDevices.getUserMedia({
+     audio: false,
+     video: true
+   })
+   .then(gotStream)
+   .catch(function(e) {
+     alert('getUserMedia() error: ' + e.name);
+   });
+   
+   function gotStream(stream) {
+     console.log('Adding local stream.');
+     localStream = stream;
+     localVideo.srcObject = stream;
+     sendMessage('got user media');
+     if (isInitiator) { // 只有再次打开另一个客户端，该值改为true，才开始交换sdp，以及candidate
+       maybeStart();
+     }
+   }
+   ```
+
+2. 再次打开一个客户端(B)，开始建立端到端连接前的检查(`createOffer/createAnswer`)，交换`SDP`，添加流(`addStream`)，接下来监听candidate，一般情况下各端都会产生两个candidate，然后添加到远端的candidate中(`pc.addIceCandidate(candidate)`)，最后全部完成，开始正常的流传输通信。
+
+   ```js
+   socket.on('message', function(message) {
+     console.log('Client received message:', message);
+     if (message === 'got user media') {
+       maybeStart();
+     } else if (message.type === 'offer') {
+       if (!isInitiator && !isStarted) {
+         maybeStart();
+       }
+       pc.setRemoteDescription(new RTCSessionDescription(message));
+       doAnswer();
+     } else if (message.type === 'answer' && isStarted) {
+       pc.setRemoteDescription(new RTCSessionDescription(message));
+     } else if (message.type === 'candidate' && isStarted) {
+       var candidate = new RTCIceCandidate({
+         sdpMLineIndex: message.label,
+         candidate: message.candidate
+       });
+       pc.addIceCandidate(candidate);
+     } else if (message === 'bye' && isStarted) {
+       handleRemoteHangup();
+     }
+   });
+   
+   function doCall() {
+     console.log('Sending offer to peer');
+     pc.createOffer(setLocalAndSendMessage, handleCreateOfferError);
+   }
+   
+   function doAnswer() {
+     console.log('Sending answer to peer.');
+     pc.createAnswer().then(
+       setLocalAndSendMessage,
+       onCreateSessionDescriptionError
+     );
+   }
+   ```
+
+### 用例6: 拍照并传给对方
 
