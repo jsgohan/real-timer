@@ -48,7 +48,7 @@ WebRTC两端可能位于同一局域网内，也有可能分别位于自己的�
 
    如：
 
-   - SIP(Session Initiation Protocol，会话初始协议) - 广发用于通过IP实现的语音通话(VoIP)和视频会议
+   - SIP(Session Initiation Protocol，会话初始协议) - 广发用于通过IP实现的语音通话(VoIP)和视频会议。要使WebRTC网页应用能和其他视频会议系统的SIP客户端通讯，WebRTC需要一个代理服务器做中介信令。信令需要流过网关，但是一旦通信已经建立起来，SRTP就可以点对点传输。
    - Jingle - XMPP协议的发信扩展，用于通过IP实现的语音通话(VoIP)和视频会议的会话控制
    - ISUP(ISDN User Part，ISDN用户部分) 
 
@@ -772,5 +772,90 @@ RTCDataChannel采用的是SCTP应用层协议，该协议类似于HTTP2.0方式�
      context.putImageData(img, 0, 0);
    }
    ```
+
+## 遗留问题
+
+看似经过这几个用例我们已经可以写出创造一个类似视频聊天的room，同时还能传输流数据。但是，这些用例都只是在本机里实现的，而无法在局域网内，甚至更不用提公网了。
+
+对于STUN、TURN还存在很多未知疑惑。还要投入更多的时间去研究这块内容。
+
+贴一个连接后面阅读http://www.52im.net/thread-557-1-1.html
+
+## 信令
+
+信令即协调通讯的过程。WebRTC应用要发起一个对话，客户端需要交换如下信息：
+
+- 用于打开和关闭通讯的会话信息
+- 错误信息
+- 媒体元数据如编解码器及其设置，带宽和媒体类型
+- 秘钥数据，用于创建安全连接
+- 网络数据，如外部能访问的主机IP和端口
+
+信令过程需要客户端之间能来回传递消息，但实际上，这个机制WebRTC是不提供的，需要自己创建。上面的用例4开始就有介绍了一种搭建信令服务的方式--`WebSocket`，除了这个方式，还可以使用以前的比较旧的技术，如长轮询、用EventSource API从服务器端推送，和XHR结合构建成交换信令消息的服务器，即一个从呼叫者开始传递信息，用XHR请求传输，通过EventSource推送到被呼叫者那。
+
+WebRTC之所以不提供信令实现，是为了避免冗余，以及做到与现有技术的最大兼容，信令方法和协议都不由WebRTC标准来指定。
+
+但WebRTC使用`JSEP协议`建立会话，采用`ICE`实现NAT穿越
+
+> JSEP(JavaScript Session Establishment Protocol, JavaScript会话建立协议)是一个信令API，允许开发者构建更强大的应用程序以及增加在信令协议选择上的灵活性
+
+WebRTC虽然没有指定具体的信令协议，但是媒体协商统一采用`SDP协议`。SDP格式含义可以参考[IETF examples](https://datatracker.ietf.org/doc/draft-nandakumar-rtcweb-sdp/?include_text=1)。`JSEP`一方面提供接口如createOffer()供web应用程序调用生成`SDP`，另一方面提供`ICE`功能接口。这些功能都由浏览器实现。以上用例就是直接使用JSEP生成offer/answer信令，然后采用ws协议传输实现的。
+
+RTCPeerConnection接口被WebRTC应用用于创建各点之间的连接并交流音视频信息，在开始之前RTCPeerConnection需要做两个工作：
+
+- 确定本地媒体情况，比如分辨率和编解码器的能力。这些元数据会用在offer/answer机制中
+- 获取可能的应用主机网络地址，即candidate
+
+当本地信息被确认后，就会通过信令系统与远程终端进行交换
+
+在WebRTC交换网络信息，即finding candidates是通过`ICE框架`查找网络链接和端口的过程
+
+## ICE应付NAT和防火墙
+
+在真实网络环境中，大多数设备都处于一层或多层NAT之后，还有杀毒软件的阻挡一些端口或协议，或者使用了代理或防火墙。防火墙和NAT事实上可能都在同一个设备上，如家庭无线路由器
+
+WebRTC使用ICE框架来克服实际应用中复杂的网络问题。要使用ICE，必须在RTCPeerConnection中传递ICE服务器的URL。ICE试图找到连接端点的最佳路径。并行的查找所有可能性，然后选择最有效的一项。ICE首先用从设备操作系统和网卡上获取的主机地址尝试连接，如果失败了(比如设备处于NAT之后)，ICE会使用从STUN服务器获取到的外部地址，如果仍然失败，再转交给TURN中继服务器来连接。
+
+STUN服务器处于公网中并有个简单任务：检查请求(来自运行与NAT之后的应用)的IP: PORT地址，并且将这个地址响应回去。这个过程使得WebRTC终端可以找到自己公共访问方法，并通过信令机制将其发送给其他终端，就可以创建一个直连连接。
+
+TURN其实就是RTCPeerConnection尝试用UDP协议建立终端间的直连失败后，改用TCP协议做终端间的数据中继。
+
+每一个TURN服务器都支持STUN，因为TURN就是在STUN服务器中内建了一个中继功能。ICE也可以应付NAT复杂的设定。
+
+## 部署STUN和TURN服务器
+
+Google运行了一个公用的STUN服务器用作测试，`stun.l.google.com:19302`。
+
+建议使用rfc766-turn-server当做产品用途的STUN/TURN服务，查看[源代码](https://code.google.com/archive/p/rfc5766-turn-server/)。
+
+备选TURN服务器[restund](http://www.creytiv.com/restund.html)，在Google Compute Engine安装restund：
+
+1. 防火墙开放tcp=443,udp/tcp=3478
+2. 创建4个实例(?)，各自的公用IP，使用标准Ubuntu 12.06镜像
+3. 配置本地防火墙(允许所有访问源)
+4. 安装工具:
+   `sudo apt-get install make`
+   `sudo apt-get install gcc`
+5. 从[creytiv.com/re.html](http://creytiv.com/re.html)安装libre
+6. 从[creytiv.com/restund.html](http://creytiv.com/restund.html)获取restund并解包
+7. wget [hancke.name/restund-auth.patch](http://hancke.name/restund-auth.patch) 并应用`patch -p1 < restund-auth.patch`
+8. 对libre和restund运行 make, `sudo make install`
+9. 按你自己的需求配置*restund.conf*(替换IP地址，确保正确的共享密钥)并复制到`/etc`目录
+10. 复制*restund/etc/restund*到*/etc/init.d/*
+11. 配置restund:
+    设置*LD_LIBRARY_PATH*
+    复制*restund.conf*到*/etc/restund.conf*
+    设置*restund.conf*使用之前配的IP地址
+12. 运行restund
+13. 在远程机器运行stund client命令做测试: `./client IP:port`
+
+## 超越端对端--多方WebRTC通讯
+
+WebRTC应用可以使用多RTCPeerConnection，让各终端之间以网状配置连接。不过，CPU和带宽都消耗非常多，尤其是在移动终端上。
+
+WebRTC应用可以按星状拓扑结构来选择一个终端分发数据流。在服务器运行一个WebRTC终端来作为重新分配机制也行
+
+
+
 
 
