@@ -822,6 +822,79 @@ TURN其实就是RTCPeerConnection尝试用UDP协议建立终端间的直连失�
 
 每一个TURN服务器都支持STUN，因为TURN就是在STUN服务器中内建了一个中继功能。ICE也可以应付NAT复杂的设定。
 
+## STUN
+
+NAT对待UDP的实现方式有四种：
+
+- Full Cone NAT：完全锥形NAT，所有从同一个内网IP和端口号发送过来的请求都会被映射成同一个外网IP和端口号，并且任何一个外网主机都可以通过这个映射的外网IP和端口号向这台内网主机发送包
+- Restricted Cone NAT：限制锥形NAT，和Full Cone NAT基本流程一样，唯一不同的是，外网主机只能够向先前已经向它发送过数据包的内网主机发送包
+- Port Restricted Cone NAT：端口限制锥形NAT，和Restricted Cone NAT基本一致，只不过包括端口号加入限制，只有内网主机先前已经给这个IP地址和端口发送过数据包
+- Symmetric NAT：对称NAT，所有从同一个内网IP和端口号发送到一个特定的目的IP和端口号的请求，都会被映射到同一个IP和端口号。如果同一台主机使用相同的源地址和端口号发送包，但是发往不同的目的地，NAT将会使用不同的映射。此外，只有收到数据的外网主机才可以反过来向内网主机发送包。
+
+### RFC3489/STUN
+
+STUN(Simple Traversal of User Datagram Protocol Through Network Address Translators)，简单的用UDP穿透NAT，是基于UDP的完整的穿透NAT的解决方案。允许应用程序发现它们与公共互联网之间存在的NAT和防火墙及其他类型。也可以让应用程序确定NAT分配给它们的公网IP地址和端口号。默认端口号是3478.
+
+STUN消息包含20个字节的消息头，包括16位的消息类型，16位的消息长度和128位的事务ID即标识符。
+
+**消息类型**:
+
+- 0x0001：捆绑请求
+- 0x0101：捆绑响应
+- 0x0111：捆绑错误响应
+- 0x0002：共享私密请求
+- 0x0102：共享私密响应
+- 0x0112：共享私密错误响应
+
+**消息长度**:
+
+消息大小的字节数，不包括20字节的头部。
+
+**事务ID**:
+
+128的标识符，用于随机请求和响应，请求与其对应的所有响应具有相同的标识符。
+
+消息头之后是0或多个属性，每个属性进行TLV编码，包括16位的属性类型、16位的属性长度和变长属性值。
+
+**功能描述**: 客户通过带外方式获得STUN服务器信息后，就打开对应的地址和端口的连接，并开始与STUN服务器进行TLS协商。一旦打开了连接，客户就通过TCP协议发送共享私密请求，服务器生成共享私密响应。STUN在客户和服务器间使用共享私密，用作捆绑请求和捆绑响应中的密匙。之后，客户使用UDP协议向STUN服务器发送捆绑请求，当捆绑请求消息到达服务器的时候，它可能经过了一个或者多个NAT。结果是STUN服务器收到的捆绑请求消息的源IP地址被映射成最靠近STUN服务器的NAT的IP地址，STUN服务器把这个源IP地址和端口号复制到一个捆绑响应消息中，发送回拥有这个IP地址和端口号的客户端。
+
+### RFC5389/STUN
+
+在RFC5389中，重新命名为Session Traversal Utilities for NAT，即NAT会话穿透效用。
+
+**用途**:
+
+- ICE(Interactive Connectivity Establishment)，交互式连接建立
+- SIP-OUTBOUND(Client-initiated connections for SIP)，SIP的客户端初始化连接
+- BEHAVE-NAV(NAT Behavior Discovery)，NAT行为发现
+
+STUN消息头为20字节，后面紧跟0或多个属性。STUN头部包含-STUN消息类型(16位)、magic cookie(32位)、事务ID(96位)和消息长度(16位)
+
+### RFC5389与RFC3489的不同点
+
+- 去掉STUN是一种完整的NAT穿透方案的概念，现在是一种用于提供NAT穿透解决方案的工具。因而，协议的名称变为NAT会话穿透效用；
+- 定义了STUN的用途；
+- 去掉了STUN关于NAT类型检测和绑定生命期发现的用法，去掉了RESPONSE-ADDRESS、CHANGED-ADDRESS、CHANGE-REQUEST、SOURCE-ADDRESS和REFLECTED-FROM属性；
+- 增加了一个固定的32位的魔术字字段，事务ID字段减少了32位长度；
+- 增加了XOR-MAPPED-ADDRESS属性，若魔术字在捆绑请求中出现时，该属性包括在捆绑响应中。否则，RFC3489中的行为是保留的（换句话说，捆绑响应中包括MAPPED-ADDRESS）；
+- 介绍了消息类型字段的正式结构，带有一对明确的位来标识Request、Response、Error-Response或Indication消息。因此，消息类型字段被划分为类别和方法两部分；
+- 明确的指出了STUN的最高2位是0b00，当用于ICE时可以简单的与RTP包区分开来；
+- 增加指纹属性来提供一种明确的方法来检测当STUN协议多路复用时，STUN与其他协议之间的差异；
+- 增加支持IPv6，IPv4客户端可以获取一个IPv6映射地址，反之亦然；
+- 增加一个long-term-credential-based认证机制；
+- 增加了SOFTWARE、REALM、NONCE和ALTERNATE-SERVER属性；
+- 去掉了共享密匙方法，因此PASSWORD属性也去掉了；
+- 去掉了使用连续10秒侦听STUN响应来识别一个攻击的做法；
+- 改变事务计时器来增加TCP友好性；
+- 去掉了STUN例子如集中分离控制和媒体面，代替的，在使用STUN协议时提供了更多的信息；
+- 定义了一类填充机制来改变长度属性的说明；
+- REALM、SERVER、原因语句和NONCE限制在127个字符，USERNAME限制在513个字节以内；
+- 为TCP和TLS改变了DNS SRV规程，UDP仍然和以前保持一致。
+
+[rfc5389](https://tools.ietf.org/html/rfc5389)
+
+[rfc3489](https://tools.ietf.org/html/rfc3489)
+
 ## 部署STUN和TURN服务器
 
 Google运行了一个公用的STUN服务器用作测试，`stun.l.google.com:19302`。
@@ -854,8 +927,4 @@ Google运行了一个公用的STUN服务器用作测试，`stun.l.google.com:193
 WebRTC应用可以使用多RTCPeerConnection，让各终端之间以网状配置连接。不过，CPU和带宽都消耗非常多，尤其是在移动终端上。
 
 WebRTC应用可以按星状拓扑结构来选择一个终端分发数据流。在服务器运行一个WebRTC终端来作为重新分配机制也行
-
-
-
-
 
